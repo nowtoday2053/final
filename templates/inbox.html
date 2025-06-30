@@ -1,0 +1,337 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+    <div class="row">
+        <!-- Accounts Sidebar -->
+        <div class="col-md-3 col-lg-2 border-end">
+            <div class="p-3">
+                <div class="form-check mb-3">
+                    <input type="checkbox" class="form-check-input" id="selectAllAccounts" checked>
+                    <label class="form-check-label" for="selectAllAccounts">All Accounts</label>
+                </div>
+                <div class="account-list">
+                    {% for account in accounts %}
+                    <div class="form-check mb-2">
+                        <input type="checkbox" class="form-check-input account-filter" 
+                               id="account-{{ account.id }}" value="{{ account.id }}" checked>
+                        <label class="form-check-label" for="account-{{ account.id }}">
+                            {{ account.login }}
+                            <span class="badge bg-primary unread-count" data-account-id="{{ account.id }}">0</span>
+                        </label>
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+        </div>
+
+        <!-- Messages Area -->
+        <div class="col-md-9 col-lg-10">
+            <!-- Toolbar -->
+            <div class="p-3 border-bottom">
+                <div class="d-flex justify-content-between align-items-center">
+                    <div class="btn-group">
+                        <button type="button" class="btn btn-outline-primary" id="refreshMessages">
+                            <i class="fas fa-sync-alt me-2"></i>Check Messages
+                        </button>
+                        <button type="button" class="btn btn-outline-secondary" id="markAllRead">
+                            <i class="fas fa-check-double me-2"></i>Mark All Read
+                        </button>
+                    </div>
+                    <div class="input-group" style="max-width: 300px;">
+                        <span class="input-group-text">
+                            <i class="fas fa-search"></i>
+                        </span>
+                        <input type="text" class="form-control" id="messageSearch" 
+                               placeholder="Search messages...">
+                    </div>
+                </div>
+            </div>
+
+            <!-- Messages List -->
+            <div class="messages-container p-3">
+                <div id="messagesList">
+                    <!-- Messages will be loaded here -->
+                </div>
+                <div id="loadingMessages" class="text-center p-5 d-none">
+                    <div class="spinner-border text-primary" role="status">
+                        <span class="visually-hidden">Loading...</span>
+                    </div>
+                    <p class="mt-2 text-muted">Loading messages...</p>
+                </div>
+                <div id="noMessages" class="text-center p-5">
+                    <i class="fas fa-inbox fa-3x text-muted mb-3"></i>
+                    <p class="text-muted">No messages for now, check later :)</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Message Template -->
+<template id="messageTemplate">
+    <div class="message-item card mb-3" data-message-id="">
+        <div class="card-body">
+            <div class="d-flex justify-content-between align-items-start">
+                <div class="message-header">
+                    <h6 class="message-sender mb-1"></h6>
+                    <small class="text-muted message-account"></small>
+                </div>
+                <small class="text-muted message-time"></small>
+            </div>
+            <p class="message-text mt-2 mb-0"></p>
+        </div>
+    </div>
+</template>
+
+<!-- Toast for notifications -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+    <div id="notification-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto">Notification</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body"></div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    const messagesList = document.getElementById('messagesList');
+    const loadingMessages = document.getElementById('loadingMessages');
+    const noMessages = document.getElementById('noMessages');
+    const messageTemplate = document.getElementById('messageTemplate');
+    const messageSearch = document.getElementById('messageSearch');
+    const selectAllAccounts = document.getElementById('selectAllAccounts');
+    const accountFilters = document.querySelectorAll('.account-filter');
+    
+    let messages = [];
+    
+    // Load messages from database (no automation)
+    function loadMessages() {
+        showLoading();
+        
+        // Get selected account IDs
+        const selectedAccounts = Array.from(accountFilters)
+            .filter(cb => cb.checked)
+            .map(cb => cb.value);
+            
+        fetch('/get_messages', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                account_ids: selectedAccounts
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            messages = data.messages;
+            displayMessages(messages);
+            updateUnreadCounts(data.unread_counts);
+        })
+        .catch(error => {
+            console.error('Error loading messages:', error);
+            showError();
+        })
+        .finally(() => {
+            hideLoading();
+        });
+    }
+    
+    // Display messages
+    function displayMessages(messages) {
+        messagesList.innerHTML = '';
+        
+        if (messages.length === 0) {
+            noMessages.classList.remove('d-none');
+            noMessages.querySelector('p').textContent = 'No messages for now, check later :)';
+            return;
+        }
+        
+        noMessages.classList.add('d-none');
+        messages.forEach(message => {
+            const messageElement = messageTemplate.content.cloneNode(true);
+            const messageItem = messageElement.querySelector('.message-item');
+            
+            messageItem.dataset.messageId = message.id;
+            messageItem.querySelector('.message-sender').textContent = message.sender;
+            messageItem.querySelector('.message-account').textContent = message.account;
+            messageItem.querySelector('.message-time').textContent = message.time;
+            messageItem.querySelector('.message-text').textContent = message.text;
+            
+            if (!message.read) {
+                messageItem.classList.add('unread');
+            }
+            
+            messagesList.appendChild(messageItem);
+        });
+    }
+    
+    // Update unread counts
+    function updateUnreadCounts(counts) {
+        document.querySelectorAll('.unread-count').forEach(badge => {
+            const accountId = badge.dataset.accountId;
+            badge.textContent = counts[accountId] || 0;
+        });
+    }
+    
+    // Show/hide loading state
+    function showLoading() {
+        loadingMessages.classList.remove('d-none');
+        messagesList.classList.add('d-none');
+        noMessages.classList.add('d-none');
+    }
+    
+    function hideLoading() {
+        loadingMessages.classList.add('d-none');
+        messagesList.classList.remove('d-none');
+    }
+    
+    function showError() {
+        messagesList.innerHTML = `
+            <div class="alert alert-danger" role="alert">
+                <i class="fas fa-exclamation-circle me-2"></i>
+                Failed to load messages. Please try again.
+            </div>
+        `;
+    }
+    
+    // Event Listeners
+    document.getElementById('refreshMessages').addEventListener('click', () => {
+        const selectedAccounts = Array.from(accountFilters)
+            .filter(cb => cb.checked)
+            .map(cb => cb.value);
+            
+        if (selectedAccounts.length === 0) {
+            showNotification('Please select at least one account', 'error');
+            return;
+        }
+        
+        showLoading();
+        
+        // Refresh messages for each selected account
+        Promise.all(selectedAccounts.map(accountId => 
+            fetch(`/refresh_messages/${accountId}`).then(res => res.json())
+        ))
+        .then(results => {
+            const errors = results.filter(r => r.status === 'error');
+            if (errors.length > 0) {
+                showNotification(`Failed to refresh some accounts: ${errors.map(e => e.message).join(', ')}`, 'error');
+            } else {
+                showNotification('Messages refreshed successfully', 'success');
+            }
+            loadMessages();
+        })
+        .catch(error => {
+            console.error('Error refreshing messages:', error);
+            showNotification('Failed to refresh messages', 'error');
+        })
+        .finally(() => {
+            hideLoading();
+        });
+    });
+    
+    messageSearch.addEventListener('input', (e) => {
+        const searchTerm = e.target.value.toLowerCase();
+        const filteredMessages = messages.filter(message => 
+            message.text.toLowerCase().includes(searchTerm) ||
+            message.sender.toLowerCase().includes(searchTerm)
+        );
+        displayMessages(filteredMessages);
+    });
+    
+    selectAllAccounts.addEventListener('change', (e) => {
+        accountFilters.forEach(cb => cb.checked = e.target.checked);
+        loadMessages();
+    });
+    
+    accountFilters.forEach(cb => {
+        cb.addEventListener('change', () => {
+            selectAllAccounts.checked = Array.from(accountFilters)
+                .every(filter => filter.checked);
+            loadMessages();
+        });
+    });
+    
+    document.getElementById('markAllRead').addEventListener('click', () => {
+        const selectedAccounts = Array.from(accountFilters)
+            .filter(cb => cb.checked)
+            .map(cb => cb.value);
+            
+        fetch('/mark_messages_read', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                account_ids: selectedAccounts
+            })
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.success) {
+                loadMessages();
+                showNotification('Messages marked as read', 'success');
+            }
+        })
+        .catch(error => {
+            console.error('Error marking messages as read:', error);
+            showNotification('Failed to mark messages as read', 'error');
+        });
+    });
+    
+    function showNotification(message, type) {
+        const toast = document.getElementById('notification-toast');
+        const toastBody = toast.querySelector('.toast-body');
+        toastBody.textContent = message;
+        toast.classList.remove('bg-success', 'bg-danger');
+        toast.classList.add(type === 'success' ? 'bg-success' : 'bg-danger');
+        toast.classList.add('text-white');
+        const bsToast = new bootstrap.Toast(toast);
+        bsToast.show();
+    }
+    
+    // Load existing messages from database
+    loadMessages();
+});
+</script>
+
+<style>
+.message-item {
+    transition: all 0.2s ease;
+}
+
+.message-item:hover {
+    transform: translateX(5px);
+    border-color: var(--bs-primary);
+}
+
+.message-item.unread {
+    background-color: rgba(var(--bs-primary-rgb), 0.05);
+    border-left: 3px solid var(--bs-primary);
+}
+
+.account-list {
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+}
+
+.messages-container {
+    max-height: calc(100vh - 100px);
+    overflow-y: auto;
+}
+
+.message-sender {
+    color: var(--bs-primary);
+}
+
+#messageSearch:focus {
+    border-color: var(--bs-primary);
+    box-shadow: 0 0 0 0.25rem rgba(var(--bs-primary-rgb), 0.25);
+}
+</style>
+{% endblock %} 

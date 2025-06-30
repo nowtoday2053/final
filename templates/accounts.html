@@ -1,0 +1,548 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="row g-4">
+    <!-- Account List -->
+    <div class="col-12">
+        <div class="card fade-in">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="card-title mb-0">
+                    <i class="fas fa-users me-2"></i>Accounts
+                </h5>
+                <div>
+                    <button class="btn btn-primary" data-bs-toggle="modal" data-bs-target="#newAccountModal">
+                        <i class="fas fa-plus me-2"></i>Add Account
+                    </button>
+                </div>
+            </div>
+            <div class="card-body p-0">
+                <div class="table-responsive">
+                    <table class="table table-hover mb-0">
+                        <thead>
+                            <tr>
+                                <th>Account</th>
+                                <th>Proxy</th>
+                                <th>Status</th>
+                                <th style="width: 120px">Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for account in accounts %}
+                            <tr>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        <div class="account-icon me-3">
+                                            <i class="fas fa-user text-primary"></i>
+                                        </div>
+                                        <div>
+                                            <h6 class="mb-0">{{ account.login }}</h6>
+                                            <small class="text-muted">Added {{ account.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td>
+                                    <div class="d-flex align-items-center">
+                                        {% if account.proxy_type %}
+                                        <span class="badge bg-info me-2">{{ account.proxy_type }}</span>
+                                        <small class="text-muted">{{ account.proxy_host }}:{{ account.proxy_port }}</small>
+                                        {% else %}
+                                        <span class="badge bg-secondary">No Proxy</span>
+                                        {% endif %}
+                                    </div>
+                                </td>
+                                <td>
+                                    <span class="badge {% if account.is_active %}bg-success{% else %}bg-danger{% endif %}">
+                                        {{ 'Active' if account.is_active else 'Inactive' }}
+                                    </span>
+                                </td>
+                                <td>
+                                    <div class="btn-group">
+                                        <button class="btn btn-sm btn-primary edit-account" data-bs-toggle="modal" data-bs-target="#editAccountModal" 
+                                                data-account-id="{{ account.id }}"
+                                                data-account-login="{{ account.login }}"
+                                                data-account-password="{{ account.password }}"
+                                                data-account-proxy-type="{{ account.proxy_type }}"
+                                                data-account-proxy-host="{{ account.proxy_host }}"
+                                                data-account-proxy-port="{{ account.proxy_port }}"
+                                                data-account-proxy-username="{{ account.proxy_username }}"
+                                                data-account-proxy-password="{{ account.proxy_password }}">
+                                            <i class="fas fa-edit"></i>
+                                        </button>
+                                        <button class="btn btn-sm btn-danger delete-account" data-account-id="{{ account.id }}" data-account-login="{{ account.login }}">
+                                            <i class="fas fa-trash"></i>
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- New Account Modal -->
+<div class="modal fade" id="newAccountModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Add New Account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="newAccountForm">
+                    {{ form.csrf_token }}
+                    
+                    <div class="mb-4">
+                        <label class="form-label">Login Type</label>
+                        <div class="btn-group w-100" role="group">
+                            {% for value, label in form.login_type.choices %}
+                            <input type="radio" class="btn-check" name="login_type" value="{{ value }}" 
+                                   id="login_type_{{ value }}" autocomplete="off" 
+                                   {% if loop.first %}checked{% endif %}>
+                            <label class="btn btn-outline-primary" for="login_type_{{ value }}">
+                                <i class="fas {% if value == 'phone' %}fa-phone{% else %}fa-envelope{% endif %} me-2"></i>
+                                {{ label }}
+                            </label>
+                            {% endfor %}
+                        </div>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Login</label>
+                        {{ form.login(class="form-control", placeholder="Enter phone number or email") }}
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Password</label>
+                        {{ form.password(class="form-control", placeholder="Enter password") }}
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Proxy Settings</label>
+                        <div class="card bg-light border-0">
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">Proxy String Format</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control font-monospace" id="proxyString" 
+                                               placeholder="username:password@host:port" oninput="updateProxyFields('new')">
+                                        <button class="btn btn-outline-success" type="button" onclick="testProxy('new')" id="testProxyBtn">
+                                            <i class="fas fa-network-wired me-1"></i>Test
+                                        </button>
+                                    </div>
+                                    <div class="form-text">Example: f07c8c18fd3404cd:RNW78Fm5@res.proxy-seller.com:10000</div>
+                                    <div id="proxyTestResult" class="mt-2" style="display: none;">
+                                        <div class="d-flex align-items-center">
+                                            <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
+                                                <span class="visually-hidden">Testing...</span>
+                                            </div>
+                                            <span class="result-text">Testing proxy...</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Hidden fields for form submission -->
+                                {{ form.proxy_type(class="d-none") }}
+                                {{ form.proxy_host(class="d-none") }}
+                                {{ form.proxy_port(class="d-none") }}
+                                {{ form.proxy_username(class="d-none") }}
+                                {{ form.proxy_password(class="d-none") }}
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="text-end">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-plus me-2"></i>Add Account
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Account Modal -->
+<div class="modal fade" id="editAccountModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit Account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editAccountForm">
+                    <input type="hidden" id="edit_account_id" name="account_id">
+                    {{ form.csrf_token }}
+                    
+                    <div class="mb-4">
+                        <label class="form-label">Login</label>
+                        <input type="text" class="form-control" id="edit_login" name="login" required>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Password</label>
+                        <input type="password" class="form-control" id="edit_password" name="password" required>
+                    </div>
+
+                    <div class="mb-4">
+                        <label class="form-label">Proxy Settings</label>
+                        <div class="card bg-light border-0">
+                            <div class="card-body">
+                                <div class="mb-3">
+                                    <label class="form-label">Proxy String Format</label>
+                                    <div class="input-group">
+                                        <input type="text" class="form-control font-monospace" id="editProxyString" 
+                                               placeholder="username:password@host:port" oninput="updateProxyFields('edit')">
+                                        <button class="btn btn-outline-success" type="button" onclick="testProxy('edit')" id="editTestProxyBtn">
+                                            <i class="fas fa-network-wired me-1"></i>Test
+                                        </button>
+                                    </div>
+                                    <div class="form-text">Example: f07c8c18fd3404cd:RNW78Fm5@res.proxy-seller.com:10000</div>
+                                    <div id="editProxyTestResult" class="mt-2" style="display: none;">
+                                        <div class="d-flex align-items-center">
+                                            <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
+                                                <span class="visually-hidden">Testing...</span>
+                                            </div>
+                                            <span class="result-text">Testing proxy...</span>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                <!-- Hidden fields for form submission -->
+                                <input type="hidden" id="edit_proxy_type" name="proxy_type">
+                                <input type="hidden" id="edit_proxy_host" name="proxy_host">
+                                <input type="hidden" id="edit_proxy_port" name="proxy_port">
+                                <input type="hidden" id="edit_proxy_username" name="proxy_username">
+                                <input type="hidden" id="edit_proxy_password" name="proxy_password">
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="text-end">
+                        <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                        <button type="submit" class="btn btn-primary">
+                            <i class="fas fa-save me-2"></i>Save Changes
+                        </button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Delete Account Modal -->
+<div class="modal fade" id="deleteAccountModal" tabindex="-1">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Delete Account</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p>Are you sure you want to delete the account "<span id="accountLoginToDelete"></span>"?</p>
+                <p class="text-danger mb-0">This action cannot be undone.</p>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-light" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" onclick="confirmDeleteAccount()">
+                    <i class="fas fa-trash me-2"></i>Delete Account
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+    // Initialize Bootstrap components
+    var editAccountModal = new bootstrap.Modal(document.getElementById('editAccountModal'));
+    var deleteAccountModal = new bootstrap.Modal(document.getElementById('deleteAccountModal'));
+    var notificationToast = new bootstrap.Toast(document.getElementById('notificationToast'));
+    
+    // Show notification
+    function showNotification(message, type = 'success') {
+        const toast = document.getElementById('notificationToast');
+        toast.querySelector('.toast-body').textContent = message;
+        toast.classList.remove('bg-success', 'bg-danger', 'bg-warning');
+        toast.classList.add(`bg-${type}`);
+        toast.classList.add('text-white');
+        notificationToast.show();
+    }
+    
+    // Handle edit account
+    document.querySelectorAll('.edit-account').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const data = this.dataset;
+            document.getElementById('edit_account_id').value = data.accountId;
+            document.getElementById('edit_login').value = data.accountLogin;
+            document.getElementById('edit_password').value = data.accountPassword;
+            
+            // Set proxy string if proxy exists
+            if (data.accountProxyHost) {
+                const proxyString = `${data.accountProxyUsername}:${data.accountProxyPassword}@${data.accountProxyHost}:${data.accountProxyPort}`;
+                document.getElementById('editProxyString').value = proxyString;
+                updateProxyFields('edit');  // Update hidden fields
+            }
+        });
+    });
+    
+    // Handle edit account form submission
+    document.getElementById('editAccountForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const accountId = document.getElementById('edit_account_id').value;
+        
+        // Create JSON data from form fields
+        const data = {
+            login_type: 'phone', // Since we don't have login type in edit form, default to phone
+            login: document.getElementById('edit_login').value,
+            password: document.getElementById('edit_password').value,
+            proxy_type: document.getElementById('edit_proxy_type').value || null,
+            proxy_host: document.getElementById('edit_proxy_host').value || null,
+            proxy_port: document.getElementById('edit_proxy_port').value || null,
+            proxy_username: document.getElementById('edit_proxy_username').value || null,
+            proxy_password: document.getElementById('edit_proxy_password').value || null
+        };
+        
+        fetch(`/edit_account/${accountId}`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            },
+            body: JSON.stringify(data)
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                showNotification(data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showNotification('An error occurred while updating the account', 'danger');
+        });
+    });
+    
+    // Handle new account form submission
+    document.getElementById('newAccountForm').addEventListener('submit', function(e) {
+        e.preventDefault();
+        
+        const formData = new FormData(this);
+        const loginType = document.querySelector('input[name="login_type"]:checked').value;
+        formData.append('login_type', loginType);
+        
+        fetch('/accounts', {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: formData
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                showNotification(data.message, 'danger');
+            }
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showNotification('An error occurred while adding the account', 'danger');
+        });
+    });
+    
+    // Handle delete account
+    document.querySelectorAll('.delete-account').forEach(function(button) {
+        button.addEventListener('click', function() {
+            const accountId = this.dataset.accountId;
+            const accountLogin = this.dataset.accountLogin;
+            
+            document.getElementById('accountLoginToDelete').textContent = accountLogin;
+            deleteAccountModal.show();
+            
+            window.accountToDelete = accountId;
+        });
+    });
+    
+    // Confirm delete account
+    function confirmDeleteAccount() {
+        const accountId = window.accountToDelete;
+        
+        fetch(`/delete_account/${accountId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            }
+        })
+        .then(response => response.json())
+        .then(data => {
+            if (data.status === 'success') {
+                location.reload();
+            } else {
+                showNotification(data.message, 'danger');
+            }
+            deleteAccountModal.hide();
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            showNotification('An error occurred while deleting the account', 'danger');
+            deleteAccountModal.hide();
+        });
+    }
+    
+    // Update proxy fields automatically when proxy string changes
+    function updateProxyFields(mode) {
+        const proxyString = mode === 'new' ? 
+            document.getElementById('proxyString').value : 
+            document.getElementById('editProxyString').value;
+            
+        try {
+            if (!proxyString) {
+                // Clear all fields if proxy string is empty
+                if (mode === 'new') {
+                    document.getElementById('proxy_type').value = '';
+                    document.getElementById('proxy_host').value = '';
+                    document.getElementById('proxy_port').value = '';
+                    document.getElementById('proxy_username').value = '';
+                    document.getElementById('proxy_password').value = '';
+                } else {
+                    document.getElementById('edit_proxy_type').value = '';
+                    document.getElementById('edit_proxy_host').value = '';
+                    document.getElementById('edit_proxy_port').value = '';
+                    document.getElementById('edit_proxy_username').value = '';
+                    document.getElementById('edit_proxy_password').value = '';
+                }
+                return;
+            }
+            
+            // Parse proxy string format: username:password@host:port
+            const [auth, hostPart] = proxyString.split('@');
+            const [username, password] = auth.split(':');
+            const [host, port] = hostPart.split(':');
+            
+            // Set form values based on mode
+            if (mode === 'new') {
+                document.getElementById('proxy_type').value = 'HTTP';
+                document.getElementById('proxy_host').value = host;
+                document.getElementById('proxy_port').value = port;
+                document.getElementById('proxy_username').value = username;
+                document.getElementById('proxy_password').value = password;
+            } else {
+                document.getElementById('edit_proxy_type').value = 'HTTP';
+                document.getElementById('edit_proxy_host').value = host;
+                document.getElementById('edit_proxy_port').value = port;
+                document.getElementById('edit_proxy_username').value = username;
+                document.getElementById('edit_proxy_password').value = password;
+            }
+        } catch (error) {
+            // Invalid format - clear fields
+            if (mode === 'new') {
+                document.getElementById('proxy_type').value = '';
+                document.getElementById('proxy_host').value = '';
+                document.getElementById('proxy_port').value = '';
+                document.getElementById('proxy_username').value = '';
+                document.getElementById('proxy_password').value = '';
+            } else {
+                document.getElementById('edit_proxy_type').value = '';
+                document.getElementById('edit_proxy_host').value = '';
+                document.getElementById('edit_proxy_port').value = '';
+                document.getElementById('edit_proxy_username').value = '';
+                document.getElementById('edit_proxy_password').value = '';
+            }
+        }
+    }
+
+    // Test proxy configuration
+    function testProxy(mode) {
+        const proxyString = mode === 'new' ? 
+            document.getElementById('proxyString').value : 
+            document.getElementById('editProxyString').value;
+            
+        if (!proxyString) {
+            showNotification('Please enter a proxy string', 'warning');
+            return;
+        }
+        
+        try {
+            // Parse proxy string format: username:password@host:port
+            const [auth, hostPart] = proxyString.split('@');
+            const [username, password] = auth.split(':');
+            const [host, port] = hostPart.split(':');
+            
+            if (!host || !port) {
+                showNotification('Invalid proxy string format', 'warning');
+                return;
+            }
+            
+            // Show testing state
+            const resultDiv = mode === 'new' ? 
+                document.getElementById('proxyTestResult') : 
+                document.getElementById('editProxyTestResult');
+            const testButton = mode === 'new' ?
+                document.getElementById('testProxyBtn') :
+                document.getElementById('editTestProxyBtn');
+                
+            resultDiv.style.display = 'block';
+            resultDiv.innerHTML = `
+                <div class="d-flex align-items-center">
+                    <div class="spinner-border spinner-border-sm text-primary me-2" role="status">
+                        <span class="visually-hidden">Testing...</span>
+                    </div>
+                    <span class="result-text">Testing proxy...</span>
+                </div>
+            `;
+            testButton.disabled = true;
+            
+            // Test proxy
+            fetch('/test_proxy', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+                },
+                body: JSON.stringify({
+                    proxy_type: 'http',
+                    proxy_host: host,
+                    proxy_port: port,
+                    proxy_username: username,
+                    proxy_password: password
+                })
+            })
+            .then(response => response.json())
+            .then(data => {
+                resultDiv.innerHTML = `
+                    <div class="alert alert-${data.status === 'success' ? 'success' : 'danger'} mb-0 mt-2">
+                        <i class="fas fa-${data.status === 'success' ? 'check-circle' : 'exclamation-circle'} me-2"></i>
+                        ${data.message}
+                    </div>
+                `;
+                testButton.disabled = false;
+            })
+            .catch(error => {
+                resultDiv.innerHTML = `
+                    <div class="alert alert-danger mb-0 mt-2">
+                        <i class="fas fa-exclamation-circle me-2"></i>
+                        An error occurred while testing the proxy
+                    </div>
+                `;
+                testButton.disabled = false;
+                console.error('Error:', error);
+            });
+        } catch (error) {
+            showNotification('Invalid proxy string format', 'error');
+            console.error('Error parsing proxy string:', error);
+        }
+    }
+</script>
+{% endblock %} 

@@ -1,0 +1,247 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container mt-4">
+    <!-- Accounts Section -->
+    <div class="row">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Active Accounts</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Phone/Email</th>
+                                    <th>Proxy</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for account in accounts %}
+                                <tr>
+                                    <td>{{ account.login }}</td>
+                                    <td>
+                                        {% if account.proxy_host %}
+                                            <span class="badge bg-info">{{ account.proxy_type.value }}</span>
+                                        {% else %}
+                                            <span class="badge bg-secondary">None</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        {% if account.is_active %}
+                                            <span class="badge bg-success">Active</span>
+                                        {% else %}
+                                            <span class="badge bg-danger">Inactive</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>
+                                        <form action="{{ url_for('delete_account', id=account.id) }}" method="post" class="d-inline">
+                                            <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                            <button type="submit" class="btn btn-danger btn-sm">
+                                                <i class="fas fa-trash"></i>
+                                            </button>
+                                        </form>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Campaigns Section -->
+    <div class="row mt-4">
+        <div class="col-12">
+            <div class="card">
+                <div class="card-header">
+                    <h5 class="card-title mb-0">Active Campaigns</h5>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table">
+                            <thead>
+                                <tr>
+                                    <th>Campaign</th>
+                                    <th style="width: 50%">Activity Log</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for campaign in campaigns %}
+                                {% if campaign.status in ['running', 'pending'] %}
+                                <tr id="campaign-row-{{ campaign.id }}">
+                                    <td>{{ campaign.name }}</td>
+                                    <td>
+                                        <div class="campaign-log" id="campaign-log-{{ campaign.id }}" style="height: 100px; overflow-y: auto; font-size: 0.85rem; background: #f8f9fa; padding: 10px; border-radius: 4px;">
+                                            <div class="log-entries">
+                                                <!-- Log entries will be added here dynamically -->
+                                            </div>
+                                        </div>
+                                    </td>
+                                    <td>
+                                        <span class="badge bg-{{ 'success' if campaign.status == 'running' else 'warning' }}">
+                                            {{ campaign.status|title }}
+                                        </span>
+                                    </td>
+                                    <td>
+                                        {% if campaign.status == 'running' %}
+                                        <button onclick="stopCampaign({{ campaign.id }})" class="btn btn-sm btn-danger">Stop</button>
+                                        {% else %}
+                                        <button onclick="startCampaign({{ campaign.id }})" class="btn btn-sm btn-success">Start</button>
+                                        {% endif %}
+                                        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+                                    </td>
+                                </tr>
+                                {% endif %}
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Toast for notifications -->
+<div class="position-fixed bottom-0 end-0 p-3" style="z-index: 11">
+    <div id="notification-toast" class="toast" role="alert" aria-live="assertive" aria-atomic="true">
+        <div class="toast-header">
+            <strong class="me-auto">Notification</strong>
+            <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+        </div>
+        <div class="toast-body"></div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+function showNotification(message, type) {
+    const toast = document.getElementById('notification-toast');
+    const toastBody = toast.querySelector('.toast-body');
+    toastBody.textContent = message;
+    toast.classList.remove('bg-success', 'bg-danger');
+    toast.classList.add(type === 'success' ? 'bg-success' : 'bg-danger');
+    toast.classList.add('text-white');
+    const bsToast = new bootstrap.Toast(toast);
+    bsToast.show();
+}
+
+function addLogEntry(campaignId, message, status = 'info') {
+    const logContainer = document.querySelector(`#campaign-log-${campaignId} .log-entries`);
+    if (logContainer) {
+        const entry = document.createElement('div');
+        entry.className = `log-entry text-${status === 'error' ? 'danger' : status === 'success' ? 'success' : 'dark'}`;
+        const time = new Date().toLocaleTimeString();
+        entry.innerHTML = `<small class="text-muted">[${time}]</small> ${message}`;
+        logContainer.appendChild(entry);
+        logContainer.scrollTop = logContainer.scrollHeight;
+    }
+}
+
+function updateCampaignRow(campaignId, status) {
+    const row = document.getElementById(`campaign-row-${campaignId}`);
+    if (row) {
+        const statusBadge = row.querySelector('.badge');
+        const actionButton = row.querySelector('button');
+        
+        if (status === 'running') {
+            statusBadge.className = 'badge bg-success';
+            statusBadge.textContent = 'Running';
+            actionButton.className = 'btn btn-sm btn-danger';
+            actionButton.textContent = 'Stop';
+            actionButton.onclick = () => stopCampaign(campaignId);
+        } else {
+            statusBadge.className = 'badge bg-warning';
+            statusBadge.textContent = 'Pending';
+            actionButton.className = 'btn btn-sm btn-success';
+            actionButton.textContent = 'Start';
+            actionButton.onclick = () => startCampaign(campaignId);
+        }
+    }
+}
+
+async function startCampaign(campaignId) {
+    try {
+        const response = await fetch(`/start_campaign/${campaignId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            }
+        });
+        
+        const data = await response.json();
+        showNotification(data.message, response.ok ? 'success' : 'error');
+        addLogEntry(campaignId, data.message, response.ok ? 'success' : 'error');
+        
+        if (response.ok) {
+            updateCampaignRow(campaignId, 'running');
+        }
+    } catch (error) {
+        const message = 'Failed to start campaign: ' + error;
+        showNotification(message, 'error');
+        addLogEntry(campaignId, message, 'error');
+    }
+}
+
+async function stopCampaign(campaignId) {
+    try {
+        const response = await fetch(`/stop_campaign/${campaignId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            }
+        });
+        
+        const data = await response.json();
+        showNotification(data.message, response.ok ? 'success' : 'error');
+        addLogEntry(campaignId, data.message, response.ok ? 'success' : 'error');
+        
+        if (response.ok) {
+            updateCampaignRow(campaignId, 'pending');
+        }
+    } catch (error) {
+        const message = 'Failed to stop campaign: ' + error;
+        showNotification(message, 'error');
+        addLogEntry(campaignId, message, 'error');
+    }
+}
+
+// Initialize Socket.IO
+const socket = io();
+
+// Listen for campaign progress updates
+socket.on('campaign_progress', function(data) {
+    const { campaign_id, message, status } = data;
+    addLogEntry(campaign_id, message, status);
+});
+
+// Handle browser close/refresh
+window.addEventListener('beforeunload', async function(e) {
+    // Get all running campaigns
+    const runningCampaigns = document.querySelectorAll('tr[id^="campaign-row-"] .badge.bg-success');
+    
+    // Stop each running campaign
+    for (const badge of runningCampaigns) {
+        const row = badge.closest('tr');
+        const campaignId = row.id.replace('campaign-row-', '');
+        await fetch(`/stop_campaign/${campaignId}`, {
+            method: 'POST',
+            headers: {
+                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
+            }
+        });
+    }
+});
+</script>
+{% endblock %} 
