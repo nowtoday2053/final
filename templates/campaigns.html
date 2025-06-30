@@ -22,30 +22,30 @@
 
     <div class="table-responsive w-100">
         <table class="table table-hover align-middle">
-            <thead>
-                <tr>
+                            <thead>
+                                <tr>
                     <th style="width: 25%">Campaign</th>
                     <th style="width: 35%">Progress</th>
                     <th style="width: 20%">Status</th>
                     <th style="width: 20%">Actions</th>
-                </tr>
-            </thead>
-            <tbody>
-                {% for campaign in campaigns %}
-                <tr>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for campaign in campaigns %}
+                <tr data-campaign-id="{{ campaign.id }}">
                     <td>
                         <div class="fw-bold">{{ campaign.name }}</div>
                         <small class="text-muted">Created {{ campaign.created_at.strftime('%Y-%m-%d %H:%M') }}</small>
                     </td>
                     <td>
                         <div>{{ campaign.processed_leads }}/{{ campaign.total_leads }} leads processed</div>
-                    </td>
-                    <td>
+                                    </td>
+                                    <td>
                         <span id="status-badge-{{ campaign.id }}" class="badge {{ 'bg-success' if campaign.status == 'running' else 'bg-secondary' }}">
                             {{ campaign.status.title() }}
-                        </span>
-                    </td>
-                    <td>
+                                        </span>
+                                    </td>
+                                    <td>
                         <div class="btn-group">
                             <button type="button" 
                                     class="btn btn-sm campaign-action" 
@@ -58,25 +58,25 @@
                                 {% if campaign.status == 'running' %}
                                 <i class="fas fa-stop"></i>
                                 <span class="action-text">Stop</span>
-                                {% else %}
+                                        {% else %}
                                 <i class="fas fa-play"></i>
                                 <span class="action-text">Start</span>
                                 {% endif %}
-                            </button>
+                                        </button>
                             <button type="button" class="btn btn-danger btn-sm" 
                                     onclick="deleteCampaign('{{ campaign.id }}')"
                                     data-bs-toggle="tooltip"
                                     title="Delete campaign">
                                 <i class="fas fa-trash"></i>
-                            </button>
-                        </div>
-                    </td>
-                </tr>
-                {% endfor %}
-            </tbody>
-        </table>
-    </div>
-</div>
+                                        </button>
+                                        </div>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
 
 <!-- New Campaign Modal -->
 <div class="modal fade" id="newCampaignModal" tabindex="-1">
@@ -88,16 +88,16 @@
             </div>
             <div class="modal-body">
                 <form method="POST" action="{{ url_for('campaigns') }}" enctype="multipart/form-data">
-                    {{ form.csrf_token }}
-                    <div class="mb-3">
-                        {{ form.name.label(class="form-label") }}
-                        {{ form.name(class="form-control") }}
-                    </div>
+                        {{ form.csrf_token }}
+                        <div class="mb-3">
+                            {{ form.name.label(class="form-label") }}
+                            {{ form.name(class="form-control") }}
+                            </div>
                     <div class="mb-3">
                         {{ form.message_template.label(class="form-label") }}
                         {{ form.message_template(class="form-control", rows="5") }}
-                    </div>
-                    <div class="mb-3">
+                        </div>
+                        <div class="mb-3">
                         {{ form.leads_file.label(class="form-label") }}
                         {{ form.leads_file(class="form-control") }}
                     </div>
@@ -132,8 +132,8 @@
                             </div>
                         </div>
                     </div>
-                    <button type="submit" class="btn btn-primary">Create Campaign</button>
-                </form>
+                        <button type="submit" class="btn btn-primary">Create Campaign</button>
+                    </form>
             </div>
         </div>
     </div>
@@ -193,20 +193,35 @@ function toggleCampaign(campaignId) {
 
 function deleteCampaign(campaignId) {
     if (confirm('Are you sure you want to delete this campaign?')) {
-        fetch(`/campaign/${campaignId}/delete`, {
-            method: 'POST'
+        fetch(`/delete_campaign/${campaignId}`, {
+            method: 'POST',
+            headers: {
+                'X-Requested-With': 'XMLHttpRequest'
+            }
         })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                location.reload();
+        .then(response => {
+            if (response.redirected) {
+                window.location.href = response.url;
             } else {
-                alert(data.message || 'An error occurred');
+                return response.json().then(data => {
+                    if (data.status === 'success') {
+                        // Remove the campaign row from the table
+                        const row = document.querySelector(`tr[data-campaign-id="${campaignId}"]`);
+                        if (row) {
+                            row.remove();
+                        } else {
+                            // If we can't find the row, just reload the page
+                            window.location.reload();
+                        }
+                    } else {
+                        throw new Error(data.message || 'Failed to delete campaign');
+                    }
+                });
             }
         })
         .catch(error => {
             console.error('Error:', error);
-            alert('An error occurred while deleting the campaign');
+            alert(error.message || 'An error occurred while deleting the campaign');
         });
     }
 }
@@ -239,7 +254,7 @@ document.addEventListener('DOMContentLoaded', function() {
             updateSelectedCount();
         });
     });
-
+    
     // Initialize selected count
     updateSelectedCount();
 });
@@ -250,7 +265,7 @@ document.addEventListener('DOMContentLoaded', function() {
     var tooltipList = tooltipTriggerList.map(function(tooltipTriggerEl) {
         return new bootstrap.Tooltip(tooltipTriggerEl);
     });
-});
+    });
 </script>
 
 <style>

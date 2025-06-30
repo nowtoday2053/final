@@ -205,13 +205,14 @@ def accounts():
                     flash(f'{field}: {error}', 'danger')
     
     accounts = Account.query.all()
-    logger.info(f"Current number of accounts: {len(accounts)}")
     return render_template('accounts.html', form=form, accounts=accounts)
 
 @app.route('/campaigns', methods=['GET', 'POST'])
 def campaigns():
     form = CampaignForm()
-    form.accounts.choices = [(a.id, a.login) for a in Account.query.all()]
+    
+    # Get all accounts for the form
+    form.accounts.choices = [(a.id, f"{a.login} ({a.login_type.name})") for a in Account.query.all()]
     
     if form.validate_on_submit():
         try:
@@ -226,89 +227,138 @@ def campaigns():
             db.session.add(campaign)
             db.session.commit()
             
-            # Save leads file
-            leads_file = form.leads_file.data
-            filename = secure_filename(leads_file.filename)
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            leads_file.save(filepath)
+            # Add selected accounts to campaign
+            selected_accounts = form.accounts.data
+            for account_id in selected_accounts:
+                campaign_account = CampaignAccount(
+                    campaign_id=campaign.id,
+                    account_id=account_id
+                )
+                db.session.add(campaign_account)
+            db.session.commit()
             
-            # Process leads file
-            try:
+            # Process uploaded file
+            if form.leads_file.data:
+                file = form.leads_file.data
+                filename = secure_filename(file.filename)
+                filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                file.save(filepath)
+                
+                # Read Excel file
                 df = pd.read_excel(filepath)
-                profile_column = df.columns[0]  # Assume first column contains profile URLs/IDs
-                total_leads = len(df)
                 
-                # Get selected accounts
-                selected_accounts = form.accounts.data
-                total_accounts = len(selected_accounts)
+                # Get valid leads
+                valid_leads = []
+                for _, row in df.iterrows():
+                    url = str(row.iloc[0]).strip()  # Get first column
+                    if url and url != 'nan':
+                        # Ensure URL has proper format
+                        if not url.startswith('http'):
+                            url = f'https://{url}'
+                        if 'ok.ru/profile/' not in url and 'ok.ru/' in url:
+                            # Convert username URL to profile URL
+                            username = url.split('ok.ru/')[-1].split('/')[0]
+                            url = f'https://ok.ru/profile/{username}'
+                        valid_leads.append(url)
                 
-                # Calculate leads distribution
-                base_leads_per_account = total_leads // total_accounts
-                remainder = total_leads % total_accounts
-                
-                current_index = 0
-                
-                # Distribute leads among accounts
-                for i, account_id in enumerate(selected_accounts):
-                    # Calculate leads for this account (add one extra if there's remainder)
-                    account_leads_count = base_leads_per_account + (1 if i < remainder else 0)
-                    end_index = current_index + account_leads_count
+                if valid_leads:
+                    # Calculate leads per account
+                    leads_per_account = len(valid_leads) // len(selected_accounts)
+                    remainder = len(valid_leads) % len(selected_accounts)
                     
-                    # Create campaign account
-                    campaign_account = CampaignAccount(
-                        campaign_id=campaign.id,
-                        account_id=account_id,
-                        leads_count=account_leads_count,
-                        messages_sent=0
-                    )
-                    db.session.add(campaign_account)
-                    
-                    # Create leads for this account
-                    account_leads = df[profile_column][current_index:end_index]
-                    for identifier in account_leads:
-                        lead = Lead(
-                            campaign_id=campaign.id,
-                            account_id=account_id,
-                            profile_url=identifier,
-                            status='pending'
-                        )
-                        db.session.add(lead)
-                        logger.info(f"Added lead {identifier} for account {account_id}")
-                    
-                    current_index = end_index
+                    # Distribute leads among accounts
+                    lead_index = 0
+                    for idx, account_id in enumerate(selected_accounts):
+                        # Calculate how many leads this account gets
+                        account_leads_count = leads_per_account + (1 if idx < remainder else 0)
+                        
+                        # Assign leads to this account
+                        for _ in range(account_leads_count):
+                            if lead_index < len(valid_leads):
+                                lead = Lead(
+                                    campaign_id=campaign.id,
+                                    account_id=account_id,
+                                    profile_url=valid_leads[lead_index],
+                                    status='pending'
+                                )
+                                db.session.add(lead)
+                                lead_index += 1
+                                
+                                # Update campaign account leads count
+                                campaign_account = CampaignAccount.query.filter_by(
+                                    campaign_id=campaign.id,
+                                    account_id=account_id
+                                ).first()
+                                if campaign_account:
+                                    campaign_account.leads_count += 1
                 
                 db.session.commit()
-                flash('Campaign created successfully!', 'success')
-                
-            except Exception as e:
-                logger.error(f"Error processing leads file: {str(e)}")
-                db.session.rollback()
-                flash(f'Error processing leads file: {str(e)}', 'danger')
-                return redirect(url_for('campaigns'))
             
-            finally:
-                # Clean up the uploaded file
-                try:
-                    os.remove(filepath)
-                except:
-                    pass
-                
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Campaign created successfully!'
+                })
+            
+            flash('Campaign created successfully!', 'success')
             return redirect(url_for('campaigns'))
             
         except Exception as e:
+            db.session.rollback()
             logger.error(f"Error creating campaign: {str(e)}")
+            
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({
+                    'status': 'error',
+                    'message': f'Error creating campaign: {str(e)}'
+                })
+            
             flash(f'Error creating campaign: {str(e)}', 'danger')
-            return redirect(url_for('campaigns'))
+    else:
+        if form.errors:
+            logger.error(f"Form validation errors: {form.errors}")
+            
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({
+                    'status': 'error',
+                    'message': 'Validation error',
+                    'errors': form.errors
+                })
+            
+            for field, errors in form.errors.items():
+                for error in errors:
+                    flash(f'{field}: {error}', 'danger')
     
-    campaigns = Campaign.query.all()
-    return render_template('campaigns.html', form=form, campaigns=campaigns)
+    # Get campaigns with additional info
+    campaigns_with_info = []
+    for campaign in Campaign.query.all():
+        total_leads = Lead.query.filter_by(campaign_id=campaign.id).count()
+        processed_leads = Lead.query.filter(
+            Lead.campaign_id == campaign.id,
+            Lead.status.in_(['completed', 'failed'])
+        ).count()
+        
+        campaign_info = {
+            'id': campaign.id,
+            'name': campaign.name,
+            'status': campaign.status,
+            'created_at': campaign.created_at,
+            'total_leads': total_leads,
+            'processed_leads': processed_leads
+        }
+        campaigns_with_info.append(campaign_info)
+    
+    return render_template('campaigns.html', form=form, campaigns=campaigns_with_info)
 
 @app.route('/delete_account/<int:id>', methods=['POST'])
 def delete_account(id):
-    account = Account.query.get_or_404(id)
-    db.session.delete(account)
-    db.session.commit()
-    flash('Account deleted successfully!', 'success')
+    try:
+        account = Account.query.get_or_404(id)
+        db.session.delete(account)
+        db.session.commit()
+        flash('Account deleted successfully!', 'success')
+    except Exception as e:
+        flash(f'Error deleting account: {str(e)}', 'danger')
     return redirect(url_for('accounts'))
 
 @app.route('/delete_campaign/<int:campaign_id>', methods=['POST'])
@@ -316,19 +366,44 @@ def delete_campaign(campaign_id):
     try:
         campaign = Campaign.query.get_or_404(campaign_id)
         
-        # Delete the campaign - related records will be deleted automatically due to cascade
-        db.session.delete(campaign)
-        db.session.commit()
-        
-        flash('Campaign deleted successfully', 'success')
-        return jsonify({'status': 'success'})
+        # Delete in this order to handle foreign key constraints
+        try:
+            # Delete leads first
+            Lead.query.filter_by(campaign_id=campaign_id).delete()
+            db.session.commit()
+            
+            # Delete campaign accounts
+            CampaignAccount.query.filter_by(campaign_id=campaign_id).delete()
+            db.session.commit()
+            
+            # Finally delete the campaign
+            db.session.delete(campaign)
+            db.session.commit()
+            
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Campaign deleted successfully!'
+                })
+            
+            flash('Campaign deleted successfully!', 'success')
+            return redirect(url_for('campaigns'))
+            
+        except Exception as inner_e:
+            db.session.rollback()
+            logger.error(f"Database error while deleting campaign {campaign_id}: {str(inner_e)}")
+            raise
+            
     except Exception as e:
-        db.session.rollback()
-        logger.error(f"Error deleting campaign: {str(e)}")
-        return jsonify({
-            'status': 'error',
-            'message': 'Failed to delete campaign. Please try again.'
-        }), 500
+        logger.error(f"Error deleting campaign {campaign_id}: {str(e)}")
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({
+                'status': 'error',
+                'message': f'Error deleting campaign: {str(e)}'
+            }), 500
+        
+        flash(f'Error deleting campaign: {str(e)}', 'danger')
+        return redirect(url_for('campaigns'))
 
 @app.route('/inbox')
 def inbox():
@@ -340,90 +415,96 @@ def test_proxy():
     try:
         data = request.get_json()
         
-        # Create proxy URL
-        proxy_type = data.get('proxy_type', 'http').lower()
+        # Extract proxy details
+        proxy_type = data.get('proxy_type')
         proxy_host = data.get('proxy_host')
         proxy_port = data.get('proxy_port')
         proxy_username = data.get('proxy_username')
         proxy_password = data.get('proxy_password')
         
+        # Skip test if no proxy type selected
+        if not proxy_type:
+            return jsonify({
+                'status': 'warning',
+                'message': 'No proxy type selected, skipping test'
+            })
+        
+        # Validate required fields
         if not all([proxy_host, proxy_port]):
             return jsonify({
                 'status': 'error',
                 'message': 'Proxy host and port are required'
-            }), 400
-            
-        # Build proxy URL
+            })
+        
+        # Format proxy URL
         if proxy_username and proxy_password:
             proxy_url = f"{proxy_type}://{proxy_username}:{proxy_password}@{proxy_host}:{proxy_port}"
         else:
             proxy_url = f"{proxy_type}://{proxy_host}:{proxy_port}"
-            
+        
+        # Configure proxy for requests
         proxies = {
             'http': proxy_url,
             'https': proxy_url
         }
         
-        # Test proxy with a request to ok.ru
-        response = requests.get('https://ok.ru', 
-                              proxies=proxies, 
-                              timeout=10,
-                              verify=False)  # Skip SSL verification for testing
+        # Test proxy with a request to a test URL
+        response = requests.get('https://www.google.com', proxies=proxies, timeout=10)
         
         if response.status_code == 200:
             return jsonify({
                 'status': 'success',
-                'message': 'Proxy connection successful!'
+                'message': 'Proxy test successful!'
             })
         else:
             return jsonify({
                 'status': 'error',
                 'message': f'Proxy test failed with status code: {response.status_code}'
-            }), 400
+            })
             
     except requests.exceptions.ProxyError as e:
-        logger.error(f"Proxy error: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': 'Invalid proxy configuration or proxy is not responding'
-        }), 400
+            'message': 'Proxy connection failed. Please check your proxy settings.'
+        })
     except requests.exceptions.Timeout:
         return jsonify({
             'status': 'error',
-            'message': 'Proxy connection timed out'
-        }), 400
+            'message': 'Proxy test timed out. The proxy may be too slow.'
+        })
     except Exception as e:
-        logger.error(f"Error testing proxy: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
-        }), 500
+            'message': f'Proxy test failed: {str(e)}'
+        })
 
 @app.route('/edit_account/<int:account_id>', methods=['POST'])
 def edit_account(account_id):
     try:
-        data = request.get_json()
         account = Account.query.get_or_404(account_id)
+        data = request.get_json()
         
-        # Update account fields
-        account.login_type = LoginType[data['login_type'].upper()]
-        account.login = data['login']
-        account.password = data['password']
-        
-        # Update proxy settings if provided
-        if data.get('proxy_type'):
-            account.proxy_type = ProxyType[data['proxy_type']]
+        # Update fields
+        if 'login' in data:
+            account.login = data['login']
+        if 'password' in data:
+            account.password = data['password']
+        if 'login_type' in data:
+            account.login_type = LoginType[data['login_type'].upper()]
+        if 'is_active' in data:
+            account.is_active = data['is_active']
+            
+        # Update proxy settings
+        if 'proxy_type' in data:
+            account.proxy_type = ProxyType[data['proxy_type']] if data['proxy_type'] else None
+        if 'proxy_host' in data:
             account.proxy_host = data['proxy_host']
+        if 'proxy_port' in data:
             account.proxy_port = data['proxy_port']
+        if 'proxy_username' in data:
             account.proxy_username = data['proxy_username']
+        if 'proxy_password' in data:
             account.proxy_password = data['proxy_password']
-        else:
-            # Clear proxy settings if not provided
-            account.proxy_type = None
-            account.proxy_host = None
-            account.proxy_port = None
-            account.proxy_username = None
-            account.proxy_password = None
         
         db.session.commit()
         
@@ -433,49 +514,51 @@ def edit_account(account_id):
         })
         
     except Exception as e:
-        logger.error(f"Error updating account {account_id}: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': 'An error occurred while updating the account'
+            'message': f'Error updating account: {str(e)}'
         }), 500
 
 @app.route('/campaign/<int:campaign_id>/distribution')
 def get_campaign_distribution(campaign_id):
-    campaign = Campaign.query.get_or_404(campaign_id)
-    
-    # Get all campaign accounts
-    campaign_accounts = CampaignAccount.query.filter_by(campaign_id=campaign_id).all()
-    
-    # Get total number of leads
-    total_leads = Lead.query.filter_by(campaign_id=campaign_id).count()
-    
-    # Calculate leads per account (evenly distributed)
-    leads_per_account = total_leads // len(campaign_accounts) if campaign_accounts else 0
-    remainder = total_leads % len(campaign_accounts) if campaign_accounts else 0
-    
-    distribution = []
-    for idx, ca in enumerate(campaign_accounts):
-        account = Account.query.get(ca.account_id)
-        # Add one more lead to first 'remainder' accounts to handle uneven distribution
-        account_leads = leads_per_account + (1 if idx < remainder else 0)
+    try:
+        # Get campaign
+        campaign = Campaign.query.get_or_404(campaign_id)
         
-        # Get number of processed leads for this account
-        processed_leads = Lead.query.filter_by(
-            campaign_id=campaign_id,
-            assigned_account_id=account.id,
-            status='completed'
-        ).count()
+        # Get total leads
+        total_leads = Lead.query.filter_by(campaign_id=campaign_id).count()
         
-        distribution.append({
-            'account_login': account.login,
-            'total_leads': account_leads,
-            'processed_leads': processed_leads
+        # Get lead status distribution
+        status_distribution = {}
+        for status in ['pending', 'completed', 'failed']:
+            count = Lead.query.filter_by(
+                campaign_id=campaign_id,
+                status=status
+            ).count()
+            status_distribution[status] = count
+        
+        # Get account distribution
+        account_distribution = []
+        campaign_accounts = CampaignAccount.query.filter_by(campaign_id=campaign_id).all()
+        
+        for ca in campaign_accounts:
+            account = Account.query.get(ca.account_id)
+            account_distribution.append({
+                'account': account.login,
+                'messages_sent': ca.messages_sent
+            })
+        
+        return jsonify({
+            'total_leads': total_leads,
+            'status_distribution': status_distribution,
+            'account_distribution': account_distribution
         })
-    
-    return jsonify({
-        'campaign_id': campaign_id,
-        'distribution': distribution
-    })
+        
+    except Exception as e:
+        return jsonify({
+            'status': 'error',
+            'message': f'Error getting campaign distribution: {str(e)}'
+        }), 500
 
 @app.route('/campaign/<int:id>/start', methods=['POST'])
 def start_campaign(id):
@@ -488,36 +571,33 @@ def start_campaign(id):
                 'status': 'error',
                 'message': 'Campaign is already running'
             }), 400
-            
-        # Get campaign accounts
+        
+        # Check if campaign has accounts
         campaign_accounts = CampaignAccount.query.filter_by(campaign_id=id).all()
         if not campaign_accounts:
             return jsonify({
                 'status': 'error',
-                'message': 'No accounts assigned to this campaign'
+                'message': 'No accounts assigned to campaign'
             }), 400
-            
-        # Get campaign leads
-        leads = Lead.query.filter_by(campaign_id=id, status='pending').all()
+        
+        # Check if campaign has leads
+        leads = Lead.query.filter_by(campaign_id=id, status='pending').count()
         if not leads:
             return jsonify({
                 'status': 'error',
-                'message': 'No pending leads found for this campaign'
+                'message': 'No pending leads in campaign'
             }), 400
-            
-        # Create and start campaign runner
-        app.socketio = socketio  # Attach socketio instance to app
-        runner = CampaignRunner(app, campaign)
-        app.campaign_runners[campaign.id] = runner
-        
-        # Start the campaign in a background thread
-        thread = Thread(target=runner.run)
-        thread.daemon = True
-        thread.start()
         
         # Update campaign status
         campaign.status = 'running'
+        campaign.started_at = datetime.utcnow()
         db.session.commit()
+        
+        # Start campaign runner in a separate thread
+        runner = CampaignRunner(id, socketio, app)
+        thread = Thread(target=runner.run)
+        thread.daemon = True
+        thread.start()
         
         return jsonify({
             'status': 'success',
@@ -528,7 +608,7 @@ def start_campaign(id):
         logger.error(f"Error starting campaign: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': f'Error starting campaign: {str(e)}'
         }), 500
 
 @app.route('/campaign/<int:id>/stop', methods=['POST'])
@@ -536,22 +616,23 @@ def stop_campaign(id):
     try:
         campaign = Campaign.query.get_or_404(id)
         
-        # Check if campaign is already stopped
+        # Check if campaign is running
         if campaign.status != 'running':
             return jsonify({
                 'status': 'error',
                 'message': 'Campaign is not running'
             }), 400
-            
-        # Stop campaign runner if exists
-        runner = app.campaign_runners.get(campaign.id)
-        if runner:
-            runner.stop()
-            del app.campaign_runners[campaign.id]
         
         # Update campaign status
         campaign.status = 'stopped'
+        campaign.stopped_at = datetime.utcnow()
         db.session.commit()
+        
+        # Emit stop event to all clients
+        socketio.emit('campaign_stopped', {
+            'campaign_id': id,
+            'message': 'Campaign stopped by user'
+        })
         
         return jsonify({
             'status': 'success',
@@ -562,7 +643,7 @@ def stop_campaign(id):
         logger.error(f"Error stopping campaign: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': f'Error stopping campaign: {str(e)}'
         }), 500
 
 @app.route('/get_account/<int:account_id>')
@@ -570,65 +651,30 @@ def get_account(account_id):
     try:
         account = Account.query.get_or_404(account_id)
         return jsonify({
-            'status': 'success',
-            'data': {
-                'login': account.login,
-                'proxy_type': account.proxy_type.value if account.proxy_type else None,
-                'proxy_host': account.proxy_host,
-                'proxy_port': account.proxy_port,
-                'proxy_username': account.proxy_username,
-                'proxy_password': account.proxy_password
-            }
+            'id': account.id,
+            'login': account.login,
+            'login_type': account.login_type.name,
+            'is_active': account.is_active,
+            'proxy_type': account.proxy_type.name if account.proxy_type else None,
+            'proxy_host': account.proxy_host,
+            'proxy_port': account.proxy_port,
+            'proxy_username': account.proxy_username,
+            'proxy_password': account.proxy_password
         })
     except Exception as e:
-        logger.error(f"Error getting account {account_id}: {str(e)}")
         return jsonify({
             'status': 'error',
-            'message': str(e)
+            'message': f'Error getting account: {str(e)}'
         }), 500
 
 @socketio.on('campaign_update')
 def handle_campaign_update(data):
-    """Handle campaign updates via Socket.IO"""
-    campaign_id = data.get('campaign_id')
-    status = data.get('status')
-    leads_processed = data.get('leads_processed', 0)
-    
-    # Broadcast the update to all connected clients
-    emit('campaign_update', {
-        'campaign_id': campaign_id,
-        'status': status,
-        'leads_processed': leads_processed
-    }, broadcast=True)
-
-# Initialize campaign runners dict
-app.campaign_runners = {}
+    """Handle campaign progress updates"""
+    try:
+        # Broadcast update to all clients
+        socketio.emit('campaign_progress', data)
+    except Exception as e:
+        logger.error(f"Error handling campaign update: {str(e)}")
 
 if __name__ == '__main__':
-    try:
-        # Try port 8080 first
-        port = 8080
-        retries = 3
-        
-        while retries > 0:
-            try:
-                socketio.run(
-                    app,
-                    host='0.0.0.0',
-                    port=port,
-                    debug=True,
-                    use_reloader=False  # Disable reloader to prevent duplicate processes
-                )
-                break
-            except OSError:
-                logger.warning(f"Port {port} is in use, trying port {port + 1}")
-                port += 1
-                retries -= 1
-                
-                if retries == 0:
-                    logger.error("Could not find an available port")
-                    raise
-                
-    except Exception as e:
-        logger.error(f"Failed to start server: {str(e)}")
-        raise 
+    socketio.run(app, host='0.0.0.0', port=8081, debug=True) 

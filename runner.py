@@ -12,13 +12,13 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 class CampaignRunner:
-    def __init__(self, app, campaign):
+    def __init__(self, campaign_id, socketio, app):
         self.app = app
-        self.campaign_id = campaign.id  # Store campaign ID instead of campaign object
+        self.campaign_id = campaign_id
         self.running = False
         self.current_bot = None
         self.logger = logging.getLogger(__name__)
-        self.socketio = SocketIO(app) if not hasattr(app, 'socketio') else app.socketio
+        self.socketio = socketio
 
     def stop(self):
         """Stop the campaign"""
@@ -28,13 +28,12 @@ class CampaignRunner:
 
     def emit_progress(self, account_id, message, status='info'):
         """Emit progress update via Socket.IO"""
-        with self.app.app_context():
-            self.socketio.emit('campaign_update', {
-                'campaign_id': self.campaign_id,
-                'account_id': account_id,
-                'message': message,
-                'status': status
-            })
+        self.socketio.emit('campaign_update', {
+            'campaign_id': self.campaign_id,
+            'account_id': account_id,
+            'message': message,
+            'status': status
+        })
 
     def get_proxy_config(self, account):
         """Get proxy configuration for an account"""
@@ -77,18 +76,25 @@ class CampaignRunner:
                     self.emit_progress(None, "No pending leads found for campaign", 'error')
                     return
                 
+                # Calculate leads per account
+                leads_per_account = total_leads // len(campaign_accounts)
+                remainder = total_leads % len(campaign_accounts)
+                
                 # Process each account
-                for campaign_account in campaign_accounts:
+                for idx, campaign_account in enumerate(campaign_accounts):
                     if not self.running:
                         break
                         
                     account = Account.query.get(campaign_account.account_id)
                     
+                    # Calculate leads for this account (add one extra if there's remainder)
+                    account_leads_count = leads_per_account + (1 if idx < remainder else 0)
+                    
                     # Get leads for this account
                     leads = Lead.query.filter_by(
                         campaign_id=self.campaign_id,
                         status='pending'
-                    ).all()
+                    ).limit(account_leads_count).all()
                     
                     if leads:
                         try:
@@ -144,6 +150,11 @@ class CampaignRunner:
                                         f"Message {'sent to' if message_sent else 'failed for'} {lead.profile_url}",
                                         status
                                     )
+                                    
+                                    # Add random delay between messages
+                                    if campaign.min_delay and campaign.max_delay:
+                                        delay = random.uniform(campaign.min_delay, campaign.max_delay)
+                                        time.sleep(delay)
                                     
                                 except Exception as e:
                                     self.logger.error(f"Error processing lead {lead.profile_url}: {str(e)}")

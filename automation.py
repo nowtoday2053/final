@@ -1,4 +1,5 @@
 import undetected_chromedriver as uc
+from seleniumwire import webdriver
 from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
@@ -58,13 +59,14 @@ class OdnoklassnikiBot:
         return default_version
         
     def setup_driver(self):
-        """Initialize undetected-chromedriver"""
+        """Initialize undetected-chromedriver with selenium-wire"""
         max_retries = 3
         retry_count = 0
         
         while retry_count < max_retries:
             try:
                 logger.info("Starting Chrome driver setup...")
+                
                 # Create Chrome options
                 options = uc.ChromeOptions()
                 
@@ -86,50 +88,37 @@ class OdnoklassnikiBot:
                 ]
                 options.add_argument(f'--user-agent={random.choice(user_agents)}')
                 
-                # Add proxy if configured
+                # Selenium Wire options for proxy
+                seleniumwire_options = {}
+                
                 if self.proxy_config:
-                    # Format proxy string based on type
                     proxy_type = self.proxy_config['type'].lower()
                     host = self.proxy_config['host']
                     port = self.proxy_config['port']
                     username = self.proxy_config.get('username')
                     password = self.proxy_config.get('password')
                     
-                    # Build proxy string
+                    # Format proxy URL with authentication
                     if username and password:
-                        proxy_str = f"{proxy_type}://{username}:{password}@{host}:{port}"
+                        proxy_url = f"{proxy_type}://{username}:{password}@{host}:{port}"
                     else:
-                        proxy_str = f"{proxy_type}://{host}:{port}"
+                        proxy_url = f"{proxy_type}://{host}:{port}"
                     
-                    # Add proxy arguments
-                    options.add_argument(f'--proxy-server={proxy_str}')
+                    # Configure Selenium Wire proxy
+                    seleniumwire_options = {
+                        'proxy': {
+                            'http': proxy_url,
+                            'https': proxy_url
+                        },
+                        'verify_ssl': False  # Sometimes needed with proxies
+                    }
                     
-                    # Additional proxy settings
-                    options.add_argument('--proxy-bypass-list=<-loopback>')
-                    options.add_argument('--host-resolver-rules="MAP * ~NOTFOUND , EXCLUDE localhost"')
-                    
-                    # Handle SSL certificates
-                    options.add_argument('--ignore-certificate-errors')
-                    options.add_argument('--ignore-ssl-errors')
-                    
-                    # Log proxy configuration (without credentials)
-                    logger.info(f"Added proxy configuration: {proxy_type}://{host}:{port}")
-
-                # Additional Chrome options for stability
-                options.add_argument('--no-sandbox')
-                options.add_argument('--disable-dev-shm-usage')
-                options.add_argument('--disable-gpu')
-                options.add_argument('--disable-software-rasterizer')
-                options.add_argument('--disable-extensions')
-                options.add_argument('--disable-notifications')
-                options.add_argument('--disable-popup-blocking')
-                options.add_argument('--disable-web-security')
-                options.add_argument('--dns-prefetch-disable')
+                    logger.info(f"Configured proxy: {proxy_type}://{host}:{port}")
                 
                 # Get Chrome version
                 chrome_version = self.get_chrome_version()
                 logger.info(f"Using Chrome version: {chrome_version}")
-
+                
                 # Clean up any existing Chrome driver processes
                 try:
                     import psutil
@@ -139,17 +128,17 @@ class OdnoklassnikiBot:
                     logger.info("Cleaned up existing Chrome driver processes")
                 except Exception as e:
                     logger.warning(f"Failed to clean up Chrome driver processes: {e}")
-
-                # Initialize Chrome driver with detected version
+                
+                # Initialize Chrome driver with Selenium Wire
                 self.driver = uc.Chrome(
                     options=options,
                     version_main=chrome_version,
+                    seleniumwire_options=seleniumwire_options,
                     use_subprocess=True,
                     driver_executable_path=None,
                     browser_executable_path=None,
                     headless=False,
-                    log_level=3,  # Reduce logging noise
-                    patcher_force_close=True
+                    log_level=3
                 )
                 
                 # Set page load timeout
@@ -176,8 +165,18 @@ class OdnoklassnikiBot:
                     """
                 })
                 
-                # Wait for network to be idle
-                time.sleep(2)
+                # Test proxy by loading a test URL
+                if self.proxy_config:
+                    try:
+                        logger.info("Testing proxy connection...")
+                        self.driver.get("https://www.google.com")
+                        WebDriverWait(self.driver, 10).until(
+                            EC.presence_of_element_located((By.NAME, "q"))
+                        )
+                        logger.info("Proxy test successful")
+                    except Exception as e:
+                        logger.error(f"Proxy test failed: {e}")
+                        raise Exception("Proxy connection failed")
                 
                 logger.info("Chrome driver initialized successfully")
                 return True
@@ -199,219 +198,232 @@ class OdnoklassnikiBot:
                     
     def __enter__(self):
         """Context manager entry"""
-        max_retries = 3
-        retry_count = 0
-        
-        while retry_count < max_retries:
-            try:
-                self.setup_driver()
-                return self
-            except Exception as e:
-                retry_count += 1
-                if retry_count < max_retries:
-                    logger.warning(f"Retrying setup (attempt {retry_count + 1}/{max_retries})")
-                    time.sleep(5)
-                else:
-                    logger.error(f"Failed to setup driver after {max_retries} attempts")
-                    raise
+        return self
         
     def __exit__(self, exc_type, exc_val, exc_tb):
         """Context manager exit"""
+        self.quit()
+        
+    def quit(self):
+        """Close the browser"""
         if self.driver:
             try:
                 self.driver.quit()
             except:
                 pass
-                
+            self.driver = None
+            
     def login(self, username: str, password: str) -> bool:
-        """Login to Odnoklassniki"""
+        """Login to OK.ru account"""
         try:
-            logger.info("Navigating to login page...")
-            self.driver.get(self.LOGIN_URL)
-            time.sleep(random.uniform(2, 4))
+            logger.info(f"Attempting to login with username: {username}")
             
-            # Wait for login form to be visible
-            wait = WebDriverWait(self.driver, 20)
+            # Navigate to login page
+            self.driver.get("https://ok.ru")
+            time.sleep(random.uniform(2, 3))
             
-            # Try to find the username field with different selectors
-            username_field = None
-            for selector in [
-                (By.NAME, "st.email"),
-                (By.ID, "field_email"),
-                (By.CSS_SELECTOR, "input[data-l='t,email']"),
-                (By.CSS_SELECTOR, "input.form-text[type='text']")
-            ]:
-                try:
-                    username_field = wait.until(EC.presence_of_element_located(selector))
-                    if username_field.is_displayed():
-                        break
-                except:
-                    continue
+            # Find and fill username field
+            username_input = WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.NAME, "st.email"))
+            )
+            username_input.clear()
+            time.sleep(random.uniform(0.5, 1))
+            self._type_like_human(username_input, username)
             
-            if not username_field:
-                logger.error("Could not find username field")
-                return False
-            
-            # Clear and fill username
-            username_field.clear()
-            self._type_like_human(username_field, username)
-            time.sleep(random.uniform(1, 2))
-            
-            # Try to find the password field with different selectors
-            password_field = None
-            for selector in [
-                (By.NAME, "st.password"),
-                (By.ID, "field_password"),
-                (By.CSS_SELECTOR, "input[data-l='t,password']"),
-                (By.CSS_SELECTOR, "input[type='password']")
-            ]:
-                try:
-                    password_field = wait.until(EC.presence_of_element_located(selector))
-                    if password_field.is_displayed():
-                        break
-                except:
-                    continue
-            
-            if not password_field:
-                logger.error("Could not find password field")
-                return False
-            
-            # Clear and fill password
-            password_field.clear()
-            self._type_like_human(password_field, password)
-            time.sleep(random.uniform(1, 2))
-            
-            # Try to find and click the login button
-            login_button = None
-            for selector in [
-                (By.CSS_SELECTOR, "input[data-l='t,sign_in']"),
-                (By.CSS_SELECTOR, "input.button-pro"),
-                (By.CSS_SELECTOR, "button[type='submit']"),
-                (By.XPATH, "//input[@value='Log in']"),
-                (By.XPATH, "//div[contains(@class, 'login-form-actions')]//input")
-            ]:
-                try:
-                    login_button = wait.until(EC.element_to_be_clickable(selector))
-                    if login_button.is_displayed():
-                        break
-                except:
-                    continue
-            
-            if not login_button:
-                logger.error("Could not find login button")
-                return False
+            # Find and fill password field
+            password_input = self.driver.find_element(By.NAME, "st.password")
+            password_input.clear()
+            time.sleep(random.uniform(0.5, 1))
+            self._type_like_human(password_input, password)
             
             # Click login button
+            login_button = self.driver.find_element(By.CSS_SELECTOR, "input[type='submit']")
             login_button.click()
-            time.sleep(random.uniform(3, 5))
             
-            # Check if login was successful by looking for common elements on the logged-in page
+            # Wait for login to complete and verify
             try:
-                wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,userPage']")))
+                # Wait for either success or failure indicators
+                WebDriverWait(self.driver, 15).until(
+                    EC.any_of(
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,userPage']")),  # Profile page
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.toolbar_nav_i")),  # Nav menu
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.nav-side.__navigation")),  # Side nav
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div.feed")),  # Feed page
+                        EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,nav_menu']"))  # Alt nav menu
+                    )
+                )
+                
+                # Additional verification - check URL and page content
+                current_url = self.driver.current_url
+                if "login" in current_url.lower() or "blocked" in current_url.lower():
+                    logger.error("Login failed - redirected to login/block page")
+                    return False
+                    
+                # Check for error messages
+                error_messages = self.driver.find_elements(By.CSS_SELECTOR, "div.input-e")
+                if error_messages:
+                    error_text = error_messages[0].text
+                    logger.error(f"Login failed - error message: {error_text}")
+                    return False
+                
+                # Additional check - try to find user menu or profile elements
+                try:
+                    WebDriverWait(self.driver, 5).until(
+                        EC.any_of(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,userPage']")),
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,nav_menu']")),
+                            EC.presence_of_element_located((By.CSS_SELECTOR, "div.nav-side.__navigation"))
+                        )
+                    )
+                except:
+                    logger.warning("Could not find user menu elements, but proceeding...")
+                
                 logger.info("Login successful")
                 return True
-            except:
+                
+            except TimeoutException:
                 logger.error("Login failed - could not verify successful login")
                 return False
                 
         except Exception as e:
-            logger.error(f"Login failed: {str(e)}")
+            logger.error(f"Login error: {str(e)}")
             return False
             
-    def get_messages(self):
-        """Get messages from inbox"""
-        try:
-            logger.info("Navigating to messages page...")
-            self.driver.get(f"{self.BASE_URL}/messages")
-            time.sleep(random.uniform(2, 4))
-            
-            # Wait for messages container
-            wait = WebDriverWait(self.driver, 20)
-            messages_container = wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, "div[data-l='t,msgBody']")))
-            
-            # Find all message elements
-            message_elements = self.driver.find_elements(By.CSS_SELECTOR, "div.msg-message")
-            
-            messages = []
-            for element in message_elements:
-                try:
-                    # Get sender info
-                    sender_element = element.find_element(By.CSS_SELECTOR, "a.user-link")
-                    sender_id = sender_element.get_attribute("href").split("/")[-1]
-                    sender_name = sender_element.text
-                    
-                    # Get message text
-                    text_element = element.find_element(By.CSS_SELECTOR, "div.msg-message_body")
-                    message_text = text_element.text
-                    
-                    # Get message time
-                    time_element = element.find_element(By.CSS_SELECTOR, "time.msg-message_time")
-                    message_time = self._parse_message_time(time_element.get_attribute("title"))
-                    
-                    # Get message ID
-                    message_id = element.get_attribute("data-msg-id")
-                    
-                    messages.append({
-                        'id': message_id,
-                        'sender_id': sender_id,
-                        'sender_name': sender_name,
-                        'text': message_text,
-                        'time': message_time
-                    })
-                except Exception as e:
-                    logger.warning(f"Failed to parse message: {str(e)}")
-                    continue
-            
-            logger.info(f"Found {len(messages)} messages")
-            return messages
-            
-        except Exception as e:
-            logger.error(f"Failed to get messages: {str(e)}")
-            return []
-            
-    def _parse_message_time(self, time_str):
-        """Parse message time string into datetime object"""
-        try:
-            # Example: "29 June 2025 18:01"
-            return datetime.strptime(time_str, "%d %B %Y %H:%M").strftime("%Y-%m-%d %H:%M:%S")
-        except:
-            return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            
     def _type_like_human(self, element, text: str):
-        """Type text like a human would"""
+        """Type text with random delays between characters"""
         for char in text:
             element.send_keys(char)
-            time.sleep(random.uniform(0.1, 0.3))  # Random delay between keystrokes
-
+            time.sleep(random.uniform(0.1, 0.3))
+            
+    def find_profile(self, identifier: str) -> bool:
+        """Find a profile by URL"""
+        try:
+            # Clean up the identifier
+            identifier = identifier.strip()
+            
+            # Remove http/https if present
+            identifier = identifier.replace('http://', '').replace('https://', '')
+            
+            # Extract profile ID from URL
+            if 'ok.ru/profile/' in identifier:
+                profile_id = identifier.split('ok.ru/profile/')[-1].split('/')[0]
+                url = f"https://ok.ru/profile/{profile_id}"
+            else:
+                # If somehow we got a non-profile URL, try using it directly
+                url = f"https://{identifier}"
+                
+            logger.info(f"Navigating to profile: {url}")
+            self.driver.get(url)
+            
+            # Wait for profile page to load - try multiple selectors
+            try:
+                # List of selectors that indicate we're on a profile page
+                profile_selectors = [
+                    "div[data-l='t,userPage']",  # Primary profile indicator
+                    "div.profile-user-info",      # Profile info container
+                    "div.user-grid",              # User grid layout
+                    "div.user-page",              # General profile page container
+                    "div[data-module='UserProfile']"  # Profile module
+                ]
+                
+                # Wait for any of these selectors to be present
+                for selector in profile_selectors:
+                    try:
+                        WebDriverWait(self.driver, 5).until(
+                            EC.presence_of_element_located((By.CSS_SELECTOR, selector))
+                        )
+                        logger.info(f"Successfully loaded profile: {url}")
+                        return True
+                    except TimeoutException:
+                        continue
+                
+                # If we get here, none of the selectors were found
+                logger.error(f"Could not verify profile page elements: {url}")
+                
+                # Check if we're on an error page or blocked
+                error_selectors = [
+                    "div.error-page",
+                    "div.access-restricted",
+                    "div.user-blocked"
+                ]
+                
+                for error_selector in error_selectors:
+                    try:
+                        error_element = self.driver.find_element(By.CSS_SELECTOR, error_selector)
+                        if error_element.is_displayed():
+                            logger.error(f"Found error page ({error_selector}): {url}")
+                            return False
+                    except NoSuchElementException:
+                        continue
+                
+                # If we're not on an error page, check the URL to verify we at least landed on the profile
+                current_url = self.driver.current_url
+                if profile_id in current_url:
+                    logger.info(f"Profile URL verified but elements not found. Proceeding anyway: {url}")
+                    return True
+                    
+                return False
+                
+            except Exception as e:
+                logger.error(f"Error verifying profile page: {url} - {str(e)}")
+                return False
+                
+        except Exception as e:
+            logger.error(f"Error finding profile {identifier}: {str(e)}")
+            return False
+            
     def send_message(self, identifier: str, message: str, min_delay: int = None, max_delay: int = None) -> bool:
         """Send a message to a profile"""
         try:
-            # Navigate to profile
-            if not self.find_profile(identifier):
-                return False
+            logger.info(f"Attempting to send message to {identifier}")
             
-            # Find and click Write button
-            write_button = None
+            # Check if we need to navigate to the profile
+            current_url = self.driver.current_url
+            profile_id = identifier.split('ok.ru/profile/')[-1].split('/')[0] if 'ok.ru/profile/' in identifier else None
+            
+            if not profile_id or profile_id not in current_url:
+                # Only navigate if we're not already on the profile
+                if not self.find_profile(identifier):
+                    logger.error(f"Could not find profile: {identifier}")
+                    return False
+            else:
+                logger.info("Already on correct profile page")
+            
+            # Wait for page to load
+            time.sleep(random.uniform(2, 4))
+            
+            # Find and click Write button using multiple selectors
             write_button_selectors = [
-                "//li[contains(@class, 'u-menu_li') and @data-l='outlandertarget,sendMessage']//a[contains(@href, '/messages/')]",
-                "//li[contains(@class, '__custom')]//a[contains(@href, '/messages/')]"
+                # Exact match selectors
+                "//li[@class='u-menu_li __hl __hla __custom' and @data-l='outlandertarget,sendMessage,t,sendMessage']//a[contains(@href, '/messages/')]",
+                "//a[contains(@class, 'button-pro') and contains(@hrefattrs, 'st.cmd=userMessageNewPage')]",
+                # Broader match selectors
+                "//li[contains(@class, 'u-menu_li')]//a[contains(@href, '/messages/')]",
+                "//a[contains(@href, '/messages/')]",
+                # Additional selectors
+                "//div[contains(@class, 'profile-user-info')]//a[contains(@href, '/messages/')]",
+                "//a[contains(@class, 'button-pro') and contains(@href, '/messages/')]"
             ]
             
+            write_button = None
             for selector in write_button_selectors:
                 try:
-                    write_button = WebDriverWait(self.driver, 2).until(
+                    write_button = WebDriverWait(self.driver, 5).until(
                         EC.element_to_be_clickable((By.XPATH, selector))
                     )
                     if write_button and write_button.is_displayed():
+                        logger.info(f"Found write button using selector: {selector}")
                         break
                 except:
                     continue
             
             if not write_button:
+                logger.error(f"Could not find write button for {identifier}")
                 return False
             
-            # Click the Write button
+            # Click the Write button and wait for message page
             write_button.click()
+            time.sleep(random.uniform(2, 3))
             
             # Find message input and send message
             try:
@@ -421,29 +433,35 @@ class OdnoklassnikiBot:
                     "//msg-input[@data-tsid='write_msg_input']//div[@contenteditable='true']",
                     "//div[@data-tsid='write_msg_input-input']",
                     "//div[contains(@class, 'js-lottie-observer')][@contenteditable='true']",
-                    "//msg-input//div[@contenteditable='true']"
+                    "//msg-input//div[@contenteditable='true']",
+                    "//div[contains(@class, 'input_placeholder')]//div[@contenteditable='true']",
+                    # Additional backup selectors
+                    "//div[contains(@class, 'message-input')]//div[@contenteditable='true']",
+                    "//div[contains(@class, 'composer_input')]//div[@contenteditable='true']"
                 ]
                 
                 for selector in message_input_selectors:
                     try:
-                        message_input = WebDriverWait(self.driver, 2).until(
+                        message_input = WebDriverWait(self.driver, 5).until(
                             EC.presence_of_element_located((By.XPATH, selector))
                         )
                         if message_input and message_input.is_displayed():
+                            logger.info(f"Found message input using selector: {selector}")
                             break
                     except:
                         continue
                 
                 if not message_input:
+                    logger.error(f"Could not find message input for {identifier}")
                     return False
                 
-                # Clear existing content
+                # Clear existing content and wait briefly
                 message_input.clear()
+                time.sleep(random.uniform(0.5, 1))
                 
                 # Type message character by character with small random delays
-                for char in message:
-                    message_input.send_keys(char)
-                    time.sleep(random.uniform(0.05, 0.1))
+                self._type_like_human(message_input, message)
+                time.sleep(random.uniform(1, 2))
                 
                 # Find and click send button
                 send_button = None
@@ -451,167 +469,60 @@ class OdnoklassnikiBot:
                     "//button[@data-tsid='button_send'][@class='primary-okmsg']",  # Exact match
                     "//button[@data-l='t,sendButton']",  # Data attribute match
                     "//button[contains(@class, 'primary-okmsg')]",  # Class match
-                    "//button[@title='Send']"  # Title match
+                    "//button[@title='Send']",  # Title match
+                    "//button[contains(@class, 'button-pro')]",  # Generic button class
+                    # Additional backup selectors
+                    "//button[contains(@class, 'messaging_submit')]",
+                    "//button[contains(@class, 'send-button')]"
                 ]
                 
                 for selector in send_button_selectors:
                     try:
-                        send_button = WebDriverWait(self.driver, 2).until(
+                        send_button = WebDriverWait(self.driver, 5).until(
                             EC.element_to_be_clickable((By.XPATH, selector))
                         )
                         if send_button and send_button.is_displayed():
+                            logger.info(f"Found send button using selector: {selector}")
                             break
                     except:
                         continue
                 
                 if not send_button:
+                    logger.error(f"Could not find send button for {identifier}")
                     return False
                 
-                # Click the send button
+                # Click the send button and wait for confirmation
                 send_button.click()
+                time.sleep(random.uniform(2, 3))
                 
-                # Apply campaign delay if specified
-                if min_delay and max_delay:
-                    delay = random.uniform(min_delay, max_delay)
-                    time.sleep(delay)
+                # Verify message was sent
+                try:
+                    # Look for sent message confirmation or new message in chat
+                    sent_selectors = [
+                        "//div[contains(@class, 'msg_success')]",
+                        "//div[contains(@class, 'message-sent')]",
+                        "//div[contains(@class, 'msg-success')]"
+                    ]
+                    
+                    for selector in sent_selectors:
+                        try:
+                            WebDriverWait(self.driver, 5).until(
+                                EC.presence_of_element_located((By.XPATH, selector))
+                            )
+                            logger.info(f"Message sent confirmation found using selector: {selector}")
+                            break
+                        except:
+                            continue
+                except:
+                    logger.warning("Could not find sent confirmation, but proceeding")
                 
+                logger.info(f"Successfully sent message to {identifier}")
                 return True
-            except:
+                
+            except Exception as e:
+                logger.error(f"Error in message composition for {identifier}: {str(e)}")
                 return False
             
         except Exception as e:
             logger.error(f"Error sending message to {identifier}: {str(e)}")
-            return False
-            
-    def find_profile(self, identifier: str) -> bool:
-        """Find a profile by URL or username"""
-        try:
-            # Clean up the identifier and navigate directly
-            identifier = identifier.strip()
-            
-            # Remove @ prefix if present
-            if identifier.startswith('@'):
-                identifier = identifier.lstrip('@')
-            
-            # Remove http/https if present
-            identifier = identifier.replace('http://', '').replace('https://', '')
-            
-            # Handle different formats
-            if 'ok.ru/profile/' in identifier:
-                # Full profile URL format
-                profile_id = identifier.split('ok.ru/profile/')[-1].split('/')[0]
-                self.driver.get(f"https://ok.ru/profile/{profile_id}")
-                return True
-            elif identifier.isdigit():
-                # Profile ID format
-                self.driver.get(f"https://ok.ru/profile/{identifier}")
-                return True
-            else:
-                # Username format
-                self.driver.get(f"https://ok.ru/{identifier}")
-                return True
-                
-        except Exception as e:
-            logger.error(f"Error finding profile {identifier}: {str(e)}")
             return False 
-
-class CampaignRunner:
-    def __init__(self, campaign_id, socketio, app):
-        self.campaign_id = campaign_id
-        self.socketio = socketio
-        self.app = app
-        self.running = True
-        
-    def emit_progress(self, message, status='info'):
-        """Emit progress update via Socket.IO"""
-        self.socketio.emit('campaign_progress', {
-            'campaign_id': self.campaign_id,
-            'message': message,
-            'status': status,
-            'timestamp': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-        })
-        
-    def run(self):
-        """Main campaign execution loop"""
-        with self.app.app_context():
-            try:
-                campaign = Campaign.query.get(self.campaign_id)
-                if not campaign:
-                    logger.error(f"Campaign {self.campaign_id} not found")
-                    return
-                
-                # Update campaign status
-                campaign.status = 'running'
-                db.session.commit()
-                
-                self.emit_progress("Campaign started", "success")
-                
-                # Get campaign accounts and their leads
-                campaign_accounts = CampaignAccount.query.filter_by(campaign_id=self.campaign_id).all()
-                
-                for ca in campaign_accounts:
-                    if not self.running:
-                        break
-                        
-                    account = ca.account
-                    leads = Lead.query.filter_by(campaign_account_id=ca.id).all()
-                    
-                    self.emit_progress(f"Processing account: {account.login}")
-                    
-                    for lead in leads:
-                        if not self.running:
-                            break
-                            
-                        try:
-                            # Simulate sending message (replace with actual OK.ru automation)
-                            time.sleep(2)  # Delay between messages
-                            
-                            # Record the message
-                            message = Message(
-                                campaign_account_id=ca.id,
-                                lead_id=lead.id,
-                                content=campaign.message_template,
-                                status='sent',
-                                sent_at=datetime.now()
-                            )
-                            db.session.add(message)
-                            
-                            # Update counters
-                            ca.messages_sent += 1
-                            lead.status = 'messaged'
-                            
-                            db.session.commit()
-                            
-                            self.emit_progress(f"Message sent to {lead.username}", "success")
-                            
-                        except Exception as e:
-                            logger.error(f"Error sending message to {lead.username}: {str(e)}")
-                            self.emit_progress(f"Failed to send message to {lead.username}: {str(e)}", "danger")
-                            
-                            # Record the failed message
-                            message = Message(
-                                campaign_account_id=ca.id,
-                                lead_id=lead.id,
-                                content=campaign.message_template,
-                                status='failed',
-                                error=str(e)
-                            )
-                            db.session.add(message)
-                            db.session.commit()
-                
-                # Update campaign status when finished
-                campaign.status = 'completed' if self.running else 'stopped'
-                db.session.commit()
-                
-                status = "success" if campaign.status == 'completed' else "warning"
-                self.emit_progress(f"Campaign {campaign.status}", status)
-                
-            except Exception as e:
-                logger.error(f"Campaign error: {str(e)}")
-                self.emit_progress(f"Campaign error: {str(e)}", "danger")
-                
-                # Update campaign status on error
-                campaign = Campaign.query.get(self.campaign_id)
-                if campaign:
-                    campaign.status = 'error'
-                    db.session.commit() 
