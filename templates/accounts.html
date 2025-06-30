@@ -363,43 +363,45 @@
     });
     
     // Handle delete account
-    document.querySelectorAll('.delete-account').forEach(function(button) {
+    document.querySelectorAll('.delete-account').forEach(button => {
         button.addEventListener('click', function() {
-            const accountId = this.dataset.accountId;
-            const accountLogin = this.dataset.accountLogin;
+            const accountId = this.getAttribute('data-account-id');
+            const accountLogin = this.getAttribute('data-account-login');
             
-            document.getElementById('accountLoginToDelete').textContent = accountLogin;
-            deleteAccountModal.show();
-            
-            window.accountToDelete = accountId;
+            if (confirm(`Are you sure you want to delete account "${accountLogin}"?`)) {
+                fetch(`/delete_account/${accountId}`, {
+                    method: 'POST',
+                    headers: {
+                        'X-Requested-With': 'XMLHttpRequest'
+                    }
+                })
+                .then(response => {
+                    if (response.redirected) {
+                        window.location.href = response.url;
+                    } else {
+                        return response.json().then(data => {
+                            if (data.status === 'success') {
+                                // Remove the account row from the table
+                                const row = this.closest('tr');
+                                if (row) {
+                                    row.remove();
+                                } else {
+                                    // If we can't find the row, just reload the page
+                                    window.location.reload();
+                                }
+                            } else {
+                                throw new Error(data.message || 'Failed to delete account');
+                            }
+                        });
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    alert(error.message || 'An error occurred while deleting the account');
+                });
+            }
         });
     });
-    
-    // Confirm delete account
-    function confirmDeleteAccount() {
-        const accountId = window.accountToDelete;
-        
-        fetch(`/delete_account/${accountId}`, {
-            method: 'POST',
-            headers: {
-                'X-CSRFToken': document.querySelector('input[name="csrf_token"]').value
-            }
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.status === 'success') {
-                location.reload();
-            } else {
-                showNotification(data.message, 'danger');
-            }
-            deleteAccountModal.hide();
-        })
-        .catch(error => {
-            console.error('Error:', error);
-            showNotification('An error occurred while deleting the account', 'danger');
-            deleteAccountModal.hide();
-        });
-    }
     
     // Update proxy fields automatically when proxy string changes
     function updateProxyFields(mode) {

@@ -354,12 +354,45 @@ def campaigns():
 def delete_account(id):
     try:
         account = Account.query.get_or_404(id)
-        db.session.delete(account)
-        db.session.commit()
-        flash('Account deleted successfully!', 'success')
+        
+        # Delete in this order to handle foreign key constraints
+        try:
+            # First delete all leads associated with this account
+            Lead.query.filter_by(account_id=id).delete()
+            db.session.commit()
+            
+            # Then delete all campaign accounts
+            CampaignAccount.query.filter_by(account_id=id).delete()
+            db.session.commit()
+            
+            # Finally delete the account
+            db.session.delete(account)
+            db.session.commit()
+            
+            if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+                return jsonify({
+                    'status': 'success',
+                    'message': 'Account deleted successfully!'
+                })
+            
+            flash('Account deleted successfully!', 'success')
+            return redirect(url_for('accounts'))
+            
+        except Exception as inner_e:
+            db.session.rollback()
+            logger.error(f"Database error while deleting account {id}: {str(inner_e)}")
+            raise
+            
     except Exception as e:
+        logger.error(f"Error deleting account {id}: {str(e)}")
+        if request.headers.get('X-Requested-With') == 'XMLHttpRequest':
+            return jsonify({
+                'status': 'error',
+                'message': f'Error deleting account: {str(e)}'
+            }), 500
+        
         flash(f'Error deleting account: {str(e)}', 'danger')
-    return redirect(url_for('accounts'))
+        return redirect(url_for('accounts'))
 
 @app.route('/delete_campaign/<int:campaign_id>', methods=['POST'])
 def delete_campaign(campaign_id):
