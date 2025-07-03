@@ -29,7 +29,7 @@ class OdnoklassnikiBot:
     def get_chrome_version(self):
         """Get the installed Chrome version"""
         try:
-            # Try PowerShell command first
+            # Try PowerShell command first (Windows)
             process = subprocess.Popen(
                 ['powershell', '-command', '(Get-Item "C:\Program Files\Google\Chrome\Application\chrome.exe").VersionInfo.FileVersion'],
                 stdout=subprocess.PIPE,
@@ -45,14 +45,24 @@ class OdnoklassnikiBot:
             logger.warning(f"Could not detect Chrome version using PowerShell: {e}")
             
         try:
-            # Try using undetected-chromedriver's built-in version detection
-            version = uc.find_chrome_executable()
-            if version:
-                logger.info(f"Detected Chrome version using undetected-chromedriver: {version}")
-                return version
+            # Try using Linux chrome version detection
+            process = subprocess.Popen(
+                ['google-chrome', '--version'],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate()
+            if stdout:
+                # Extract version number from output like "Google Chrome 122.0.6261.94"
+                version_match = re.search(r'Chrome\s+(\d+)', stdout)
+                if version_match:
+                    version = version_match.group(1)
+                    logger.info(f"Detected Chrome version: {version}")
+                    return int(version)
         except Exception as e:
-            logger.warning(f"Could not detect Chrome version using undetected-chromedriver: {e}")
-        
+            logger.warning(f"Could not detect Chrome version using google-chrome --version: {e}")
+            
         # Default to latest known working version
         default_version = 122
         logger.warning(f"Could not detect Chrome version, using default: {default_version}")
